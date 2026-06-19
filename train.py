@@ -59,7 +59,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ============================================================
 LABEL_COLUMN = '学期末是否挂科'
 
-MUST_EXCLUDE = ['学生编号', '成绩等级']
+MUST_EXCLUDE = ['学生编号', '成绩等级', 'GradeClass', '平均绩点GPA']
 
 ALLOWED_FEATURES = [
     '年龄',
@@ -74,7 +74,6 @@ ALLOWED_FEATURES = [
     '是否参加体育活动',
     '是否参加音乐活动',
     '是否参加志愿服务',
-    '平均绩点GPA',
 ]
 
 # ============================================================
@@ -151,10 +150,12 @@ def validate_and_resolve_columns(df):
 
 def _get_leak_reason(col):
     reasons = {
-        '学生编号': '学生编号为唯一ID，不具备预测意义。',
-        '成绩等级': '成绩等级与挂科标签存在直接派生关系（成绩等级=4 ⇒ 学期末是否挂科=1），属于数据泄露字段。',
+        '学生编号': '唯一ID，不具备预测意义。',
+        '成绩等级': '与标签存在直接派生关系，仅用于EDA分析，禁止参与模型训练。',
+        'GradeClass': '与标签存在直接派生关系，仅用于EDA分析，禁止参与模型训练。',
+        '平均绩点GPA': '若包含本学期成绩则与标签存在时序重叠（数据泄露风险），已剔除；仅用于EDA分析。',
     }
-    return reasons.get(col, '该字段被明确排除。')
+    return reasons.get(col, '不在允许特征列表中。')
 
 
 # ============================================================
@@ -225,22 +226,22 @@ def output_feature_review(label_col, feature_cols, drop_cols):
     print('=' * 60)
 
     print(f'\n标签列: {label_col}')
-    print(f'\n最终特征列表 ({len(feature_cols)}):')
+    print(f'\n训练特征列表 ({len(feature_cols)}):')
     for i, col in enumerate(feature_cols, 1):
         print(f'  {i}. {col}')
-    print(f'\n排除字段: {drop_cols if drop_cols else "无"}')
+    print(f'\n排除字段（不参与训练，仅用于EDA分析和热力图）: {drop_cols if drop_cols else "无"}')
 
     lines = []
     lines.append('特征审查报告')
     lines.append('=' * 50)
     lines.append('')
-    lines.append(f'标签列: {label_col}')
+    lines.append(f'标签列: {label_col}（唯一标签，禁止使用其他列作为预测目标）')
     lines.append('')
-    lines.append(f'最终特征列表 ({len(feature_cols)}):')
+    lines.append(f'训练特征列表 ({len(feature_cols)}):')
     for i, col in enumerate(feature_cols, 1):
         lines.append(f'  {i}. {col}')
     lines.append('')
-    lines.append(f'排除字段: {drop_cols if drop_cols else "无"}')
+    lines.append(f'排除字段（不参与训练，仅用于EDA分析和热力图）: {drop_cols if drop_cols else "无"}')
     if drop_cols:
         lines.append('')
         lines.append('排除原因:')
@@ -248,7 +249,7 @@ def output_feature_review(label_col, feature_cols, drop_cols):
             if col in MUST_EXCLUDE:
                 lines.append(f'  - {col}: {_get_leak_reason(col)}')
             else:
-                lines.append(f'  - {col}: 未在允许的特征列表中')
+                lines.append(f'  - {col}: 不在允许特征列表中')
 
     rpath = os.path.join(OUTPUT_DIR, 'feature_review.txt')
     with open(rpath, 'w', encoding='utf-8') as f:
@@ -444,7 +445,10 @@ def task5_charts(imp_df, results_df, df):
     plt.close()
     print(f'模型对比图: {p2}')
 
-    ndf = df.select_dtypes(include=[np.number])
+    ndf = df.select_dtypes(include=[np.number]).copy()
+    for _c in ['成绩等级', 'GradeClass']:
+        if _c in df.columns and _c not in ndf.columns:
+            ndf[_c] = pd.to_numeric(df[_c], errors='coerce')
     if ndf.shape[1] >= 2:
         corr = ndf.corr()
         sz = max(10, corr.shape[1] * 0.7)
@@ -501,18 +505,18 @@ def task6_report(label_col, feature_cols, drop_cols, results_df, imp_df, df):
     lines.append('')
     lines.append('**数据集概览：**')
     lines.append(f'- 样本总数：{df.shape[0]:,}')
-    lines.append(f'- 特征总数：{len(feature_cols)}')
+    lines.append(f'- 训练特征数：{len(feature_cols)}')
     lines.append(f'- 标签字段：{label_col}')
     if drop_cols:
         _drop_str = ', '.join(drop_cols)
-        lines.append(f'- 排除的字段：{_drop_str}')
+        lines.append(f'- EDA分析字段（不参与训练）：{_drop_str}')
     lines.append('')
     lines.append('## 二、数据预处理方法')
     lines.append('')
     lines.append('本研究以 scikit-learn 为核心工具，预处理流程如下：')
     lines.append('')
-    lines.append('1. **标签列固定** — 根据数据字典设置标签列为 `学期末是否挂科`。')
-    lines.append('2. **排除数据泄露字段** — 排除 `学生编号`（唯一ID）和 `成绩等级`（与标签存在直接派生关系）。')
+    lines.append('1. **标签列固定** — 根据数据字典设置标签列为 `学期末是否挂科`（唯一标签列）。')
+    lines.append('2. **特征筛选** — 仅使用数据字典允许的特征列进入训练；可能含数据泄露风险的字段仅用于EDA分析。')
     lines.append('3. **缺失值处理**：')
     lines.append('   - 数值特征：中位数填充')
     lines.append('   - 类别特征：众数填充')
