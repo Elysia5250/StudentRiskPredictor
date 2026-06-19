@@ -1,0 +1,27 @@
+数据集分析报告
+==================================================
+
+数据文件:     student_performance.csv
+数据行数:     500
+数据列数:     10
+特征字段:     ['Gender', 'Age', 'Major', 'AttendanceRate', 'StudyHoursPerWeek', 'PreviousGPA', 'HomeworkScore', 'ExamScore']
+标签字段:     Grade
+忽略的字段:   ['StudentID']
+
+缺失值统计:
+  AttendanceRate: 10 (2.00%)
+  StudyHoursPerWeek: 10 (2.00%)
+  HomeworkScore: 10 (2.00%)
+
+数据类型统计:
+  float64: 5 列
+  object: 4 列
+  int64: 1 列
+
+前5行数据:
+  StudentID Gender  Age      Major  AttendanceRate  StudyHoursPerWeek  PreviousGPA  HomeworkScore  ExamScore Grade
+0     S0001      M   22         CS        0.799200          15.675036     3.049873      72.821491  43.861839  Fail
+1     S0002      F   24  Chemistry        0.701185                NaN     2.719738      94.365915  70.843615  Pass
+2     S0003      M   18       Math        0.546566           8.065153     2.559727      95.555709  44.360161  Fail
+3     S0004      M   20    Physics        0.948068          19.405895     3.021638      91.108863  66.669318  Pass
+4     S0005      M   19         CS        0.747174           8.595287     3.208518      65.717318  63.971496  Pass
