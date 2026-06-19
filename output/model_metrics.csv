@@ -1,4 +1,4 @@
 Model,Accuracy,Precision,Recall,F1
-Logistic Regression,0.83,0.8256,0.83,0.8269
-Decision Tree,0.97,0.9729,0.97,0.9704
-Random Forest,1.0,1.0,1.0,1.0
+Logistic Regression,0.93,0.9347,0.93,0.9321
+Decision Tree,0.97,0.979,0.97,0.9724
+Random Forest,0.97,0.9709,0.97,0.9661

@@ -4,7 +4,7 @@
 高校学生学业风险预测系统
 ===========================
 功能：
-  1. 自动分析数据集
+  1. 自动分析数据集（按数据字典约束）
   2. 机器学习建模（逻辑回归/决策树/随机森林）
   3. 模型评估
   4. 特征重要性分析
@@ -54,74 +54,124 @@ OUTPUT_DIR = os.path.join(BASE_DIR, 'output')
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# ============================================================
+# 数据字典（硬编码，禁止自动猜测）
+# ============================================================
+LABEL_COLUMN = '学期末是否挂科'
+
+MUST_EXCLUDE = ['学生编号', '成绩等级']
+
+ALLOWED_FEATURES = [
+    '年龄',
+    '性别',
+    '学生背景类别',
+    '父母最高教育水平',
+    '每周自主学习时长',
+    '本学期旷课次数',
+    '是否参加课外辅导',
+    '父母学业支持程度',
+    '是否参加课外活动',
+    '是否参加体育活动',
+    '是否参加音乐活动',
+    '是否参加志愿服务',
+    '平均绩点GPA',
+]
 
 # ============================================================
 # 辅助函数
 # ============================================================
 
 def find_csv_files():
-    """查找 data/ 目录下所有 CSV 文件"""
     files = sorted(glob.glob(os.path.join(DATA_DIR, '*.csv')))
     return files
 
 
-def auto_detect_label_column(df):
-    """自动推断标签列"""
-    keywords = [
-        'target', 'label', 'class', 'grade', 'result',
-        '挂科', 'fail', 'pass', 'y', 'output',
-        '成绩', '等级', '是否挂科', 'is_fail', 'is_pass',
-        'status', 'flag', 'category', 'outcome',
-    ]
-    for col in df.columns:
-        cl = col.lower().strip()
-        for kw in keywords:
-            if cl == kw or (len(kw) > 1 and kw in cl):
-                return col
-    last = df.columns[-1]
-    if df[last].nunique() <= 10:
-        return last
-    for col in df.columns:
-        if col == last:
-            continue
-        if 2 <= df[col].nunique() <= 10:
-            return col
-    return last
+def validate_and_resolve_columns(df):
+    """按数据字典校验列，返回 (label_col, feature_cols, drop_cols) 或抛出异常"""
+    # 1. 标签列必须存在
+    if LABEL_COLUMN not in df.columns:
+        print(f'错误：CSV 中未找到标签列 "{LABEL_COLUMN}"')
+        print(f'当前 CSV 包含的列：{list(df.columns)}')
+        sys.exit(1)
+
+    label_col = LABEL_COLUMN
+
+    # 2. 识别实际存在的列
+    existing_allowed = [c for c in ALLOWED_FEATURES if c in df.columns]
+    existing_excluded = [c for c in MUST_EXCLUDE if c in df.columns]
+    unknown_cols = [c for c in df.columns if c not in ALLOWED_FEATURES and c != label_col and c not in MUST_EXCLUDE]
+
+    # 3. 数据泄露检查
+    leak_cols = [c for c in MUST_EXCLUDE if c in df.columns and c in ALLOWED_FEATURES]
+    leaked_in_features = [c for c in existing_excluded if c in existing_allowed or c in unknown_cols]
+    # 更严格：如果排除字段出现在可能的训练特征中则终止
+    # 这里检查 must_exclude 的列是否在 CSV 中被错误地当特征
+    # 实际上它们是必须排除的，如果在 allowed 里肯定报错，如果在 CSV 里但不在 allowed 里也报错
+    # 核心规则：MUST_EXCLUDE 的列不得以任何形式进入训练
+
+    # 检查数据泄露：排除字段是否即将被选为特征
+    for col in MUST_EXCLUDE:
+        if col in df.columns and col != label_col:
+            # 如果这个排除字段在 CSV 里存在，且它不应该是标签，就检查是否可能被误选为特征
+            # 我们的逻辑是 feature_cols 只从 ALLOWED_FEATURES ∩ df.columns 取，
+            # 所以如果 MUST_EXCLUDE 里的列碰巧也在 ALLOWED_FEATURES 里（或 CSVer 错误地包含了它），就要报错
+            if col in ALLOWED_FEATURES or col not in [label_col]:
+                pass  # 先不报错，我们用更明确的方式检查
+
+    # 如果排除字段在 allowed 列表中，一定是数据字典冲突
+    for col in MUST_EXCLUDE:
+        if col in ALLOWED_FEATURES:
+            raise ValueError(f'数据字典配置错误："{col}" 同时存在于 MUST_EXCLUDE 和 ALLOWED_FEATURES')
+
+    # 检查 CSV 中是否存在排除字段，如果存在且不在标签中，说明用户提供了这些列
+    # 我们需要确保它们不会进入训练
+    excl_in_csv = [c for c in MUST_EXCLUDE if c in df.columns]
+
+    # 构建最终特征列表：只取 ALLOWED_FEATURES 中在 CSV 实际存在的列
+    feature_cols = [c for c in ALLOWED_FEATURES if c in df.columns]
+
+    # 如果 CSV 中包含了排除字段，记录它们以供输出
+    drop_cols = list(excl_in_csv)
+    drop_cols.extend(unknown_cols)
+
+    # 数据泄露检测：如果 学生编号 或 成绩等级 出现在 feature_cols 中，立即终止
+    for col in MUST_EXCLUDE:
+        if col in feature_cols:
+            print('\n' + '=' * 50)
+            print('  DATA LEAKAGE DETECTED')
+            print('=' * 50)
+            print(f'\n发现泄露字段: "{col}"')
+            print(f'该字段属于 MUST_EXCLUDE，但出现在训练特征中。')
+            print(f'原因：{_get_leak_reason(col)}')
+            print(f'\n请检查 CSV 和数据字典配置后重试。')
+            sys.exit(1)
+
+    return label_col, feature_cols, drop_cols
 
 
-def auto_detect_feature_columns(df, label_col):
-    """自动识别特征列，排除 ID 类字段"""
-    id_kw = ['id', '学号', 'student', '编号', 'code', 'num']
-    features = []
-    drops = []
-    for col in df.columns:
-        if col == label_col:
-            continue
-        cl = col.lower().strip()
-        if any(kw in cl for kw in id_kw):
-            drops.append(col)
-        else:
-            features.append(col)
-    return features, drops
+def _get_leak_reason(col):
+    reasons = {
+        '学生编号': '学生编号为唯一ID，不具备预测意义。',
+        '成绩等级': '成绩等级与挂科标签存在直接派生关系（成绩等级=4 ⇒ 学期末是否挂科=1），属于数据泄露字段。',
+    }
+    return reasons.get(col, '该字段被明确排除。')
 
 
 # ============================================================
 # 任务1：数据集分析
 # ============================================================
 
-def task1_analyze(df, csv_path):
+def task1_analyze(df, csv_path, label_col, feature_cols, drop_cols):
     print('=' * 60)
     print('【任务1】数据集分析')
     print('=' * 60)
 
-    label_col = auto_detect_label_column(df)
-    feature_cols, drop_cols = auto_detect_feature_columns(df, label_col)
     n_rows, n_cols = df.shape
 
     print(f'标签列: [{label_col}]')
     print(f'特征列 ({len(feature_cols)}): {feature_cols}')
     if drop_cols:
-        print(f'忽略列: {drop_cols}')
+        print(f'排除列: {drop_cols}')
 
     # 缺失值
     missing = df.isnull().sum()
@@ -130,31 +180,30 @@ def task1_analyze(df, csv_path):
     # 数据类型
     dtype_counts = df.dtypes.value_counts()
 
-    # 写入报告
     lines = []
     lines.append('数据集分析报告')
     lines.append('=' * 50)
-    lines.append(f'')
+    lines.append('')
     lines.append(f'数据文件:     {os.path.basename(csv_path)}')
     lines.append(f'数据行数:     {n_rows}')
     lines.append(f'数据列数:     {n_cols}')
-    lines.append(f'特征字段:     {feature_cols}')
     lines.append(f'标签字段:     {label_col}')
+    lines.append(f'特征字段 ({len(feature_cols)}): {feature_cols}')
     if drop_cols:
-        lines.append(f'忽略的字段:   {drop_cols}')
-    lines.append(f'')
-    lines.append(f'缺失值统计:')
+        lines.append(f'排除的字段:   {drop_cols}')
+    lines.append('')
+    lines.append('缺失值统计:')
     if len(missing):
         for col, v in missing.items():
             lines.append(f'  {col}: {v} ({v / n_rows * 100:.2f}%)')
     else:
-        lines.append(f'  无缺失值')
-    lines.append(f'')
-    lines.append(f'数据类型统计:')
+        lines.append('  无缺失值')
+    lines.append('')
+    lines.append('数据类型统计:')
     for dt, cnt in dtype_counts.items():
         lines.append(f'  {dt}: {cnt} 列')
-    lines.append(f'')
-    lines.append(f'前5行数据:')
+    lines.append('')
+    lines.append('前5行数据:')
     lines.append(df.head().to_string())
 
     report = '\n'.join(lines)
@@ -163,14 +212,55 @@ def task1_analyze(df, csv_path):
         f.write(report)
     print(f'\n报告已保存: {rpath}')
 
-    return label_col, feature_cols, drop_cols, report
+    return report
+
+
+# ============================================================
+# 输出特征审查报告
+# ============================================================
+
+def output_feature_review(label_col, feature_cols, drop_cols):
+    print('\n' + '=' * 60)
+    print('【特征审查】')
+    print('=' * 60)
+
+    print(f'\n标签列: {label_col}')
+    print(f'\n最终特征列表 ({len(feature_cols)}):')
+    for i, col in enumerate(feature_cols, 1):
+        print(f'  {i}. {col}')
+    print(f'\n排除字段: {drop_cols if drop_cols else "无"}')
+
+    lines = []
+    lines.append('特征审查报告')
+    lines.append('=' * 50)
+    lines.append('')
+    lines.append(f'标签列: {label_col}')
+    lines.append('')
+    lines.append(f'最终特征列表 ({len(feature_cols)}):')
+    for i, col in enumerate(feature_cols, 1):
+        lines.append(f'  {i}. {col}')
+    lines.append('')
+    lines.append(f'排除字段: {drop_cols if drop_cols else "无"}')
+    if drop_cols:
+        lines.append('')
+        lines.append('排除原因:')
+        for col in drop_cols:
+            if col in MUST_EXCLUDE:
+                lines.append(f'  - {col}: {_get_leak_reason(col)}')
+            else:
+                lines.append(f'  - {col}: 未在允许的特征列表中')
+
+    rpath = os.path.join(OUTPUT_DIR, 'feature_review.txt')
+    with open(rpath, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+    print(f'\n特征审查报告已保存: {rpath}')
 
 
 # ============================================================
 # 任务2 & 3：建模 & 评估
 # ============================================================
 
-def task2_3_train_and_evaluate(df, label_col, feature_cols, drop_cols):
+def task2_3_train_and_evaluate(df, label_col, feature_cols):
     print('\n' + '=' * 60)
     print('【任务2 & 3】机器学习建模与评估')
     print('=' * 60)
@@ -178,11 +268,6 @@ def task2_3_train_and_evaluate(df, label_col, feature_cols, drop_cols):
     X = df[feature_cols].copy()
     y = df[label_col].copy()
 
-    # 编码标签
-    le = LabelEncoder()
-    y_enc = le.fit_transform(y)
-
-    # 区分数值/类别列
     numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
     categorical_cols = X.select_dtypes(exclude=[np.number]).columns.tolist()
 
@@ -206,13 +291,16 @@ def task2_3_train_and_evaluate(df, label_col, feature_cols, drop_cols):
 
     preprocessor = ColumnTransformer(transformers, remainder='drop')
 
-    # 划分
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y_enc, test_size=0.2, random_state=42, stratify=y_enc,
+    # 划分（先拆分再编码标签，防止数据泄露）
+    X_train, X_test, y_train_raw, y_test_raw = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y,
     )
     print(f'\n训练集: {X_train.shape[0]}  测试集: {X_test.shape[0]}')
 
-    # 模型定义
+    le = LabelEncoder()
+    y_train = le.fit_transform(y_train_raw)
+    y_test = le.transform(y_test_raw)
+
     models = {
         'Logistic Regression': LogisticRegression(max_iter=1000, random_state=42),
         'Decision Tree': DecisionTreeClassifier(random_state=42),
@@ -270,7 +358,6 @@ def task4_feature_importance(preprocessor, pipelines, numeric_cols, categorical_
     rf = pipelines['Random Forest'].named_steps['clf']
     imp = rf.feature_importances_
 
-    # 重构特征名
     names = []
     if numeric_cols:
         names.extend(numeric_cols)
@@ -280,7 +367,6 @@ def task4_feature_importance(preprocessor, pipelines, numeric_cols, categorical_
             ohe = cat_tfm.named_steps['ohe']
             names.extend(ohe.get_feature_names_out(categorical_cols))
 
-    # 如果长度不匹配则截断
     n = min(len(imp), len(names))
     imp = imp[:n]
     names = names[:n]
@@ -311,7 +397,6 @@ def task5_charts(imp_df, results_df, df):
     colors_bar = ['#4C72B0', '#DD8452', '#55A868', '#C44E52', '#8172B3',
                   '#937860', '#DA8BC3', '#8C8C8C', '#CCB974', '#64B5CD']
 
-    # ---------- 1. 特征重要性 ----------
     if imp_df is not None and len(imp_df):
         top_n = min(15, len(imp_df))
         plot_data = imp_df.head(top_n).iloc[::-1]
@@ -331,7 +416,6 @@ def task5_charts(imp_df, results_df, df):
         plt.close()
         print(f'特征重要性图: {p1}')
 
-    # ---------- 2. 模型对比 ----------
     fig, ax = plt.subplots(figsize=(10, 6))
     x = np.arange(len(results_df))
     width = 0.2
@@ -360,7 +444,6 @@ def task5_charts(imp_df, results_df, df):
     plt.close()
     print(f'模型对比图: {p2}')
 
-    # ---------- 3. 相关性热力图 ----------
     ndf = df.select_dtypes(include=[np.number])
     if ndf.shape[1] >= 2:
         corr = ndf.corr()
@@ -413,7 +496,8 @@ def task6_report(label_col, feature_cols, drop_cols, results_df, imp_df, df):
     lines.append('')
     lines.append('## 一、数据集介绍')
     lines.append('')
-    lines.append(f'本实验采用的数据集为CSV格式，共包含 **{df.shape[0]:,}** 条样本记录和 **{df.shape[1]}** 个字段。经自动分析，标签列为 **{label_col}**，特征字段共 **{len(feature_cols)}** 个。')
+    lines.append(f'本实验采用的数据集为CSV格式，共包含 **{df.shape[0]:,}** 条样本记录和 **{df.shape[1]}** 个字段。')
+    lines.append(f'根据数据字典定义，标签列为 **{label_col}**，有效特征共 **{len(feature_cols)}** 个。')
     lines.append('')
     lines.append('**数据集概览：**')
     lines.append(f'- 样本总数：{df.shape[0]:,}')
@@ -421,14 +505,14 @@ def task6_report(label_col, feature_cols, drop_cols, results_df, imp_df, df):
     lines.append(f'- 标签字段：{label_col}')
     if drop_cols:
         _drop_str = ', '.join(drop_cols)
-        lines.append(f'- 排除的ID字段：{_drop_str}')
+        lines.append(f'- 排除的字段：{_drop_str}')
     lines.append('')
     lines.append('## 二、数据预处理方法')
     lines.append('')
     lines.append('本研究以 scikit-learn 为核心工具，预处理流程如下：')
     lines.append('')
-    lines.append('1. **标签列自动识别** — 通过关键词匹配和列特性分析自动推断。')
-    lines.append('2. **ID列过滤** — 自动排除学号、编号等无关字段。')
+    lines.append('1. **标签列固定** — 根据数据字典设置标签列为 `学期末是否挂科`。')
+    lines.append('2. **排除数据泄露字段** — 排除 `学生编号`（唯一ID）和 `成绩等级`（与标签存在直接派生关系）。')
     lines.append('3. **缺失值处理**：')
     lines.append('   - 数值特征：中位数填充')
     lines.append('   - 类别特征：众数填充')
@@ -515,7 +599,6 @@ def main():
         print('运行方式:  python train.py')
         sys.exit(0)
 
-    # 多文件选择
     if len(csv_files) > 1:
         print(f'\n发现 {len(csv_files)} 个 CSV 文件:')
         for i, fp in enumerate(csv_files):
@@ -533,7 +616,6 @@ def main():
     else:
         csv_path = csv_files[0]
 
-    # 读取数据
     print(f'\n读取数据: {os.path.basename(csv_path)}')
     try:
         df = pd.read_csv(csv_path, encoding='utf-8')
@@ -545,12 +627,18 @@ def main():
 
     print(f'数据维度: {df.shape[0]} 行 × {df.shape[1]} 列\n')
 
+    # ---- 按数据字典校验并解析列 ----
+    label_col, feature_cols, drop_cols = validate_and_resolve_columns(df)
+
+    # ---- 输出特征审查报告 ----
+    output_feature_review(label_col, feature_cols, drop_cols)
+
     # ---- 任务1 ----
-    label_col, feature_cols, drop_cols, _ = task1_analyze(df, csv_path)
+    task1_analyze(df, csv_path, label_col, feature_cols, drop_cols)
 
     # ---- 任务2 & 3 ----
     results_df, pipelines, preprocessor, numeric_cols, categorical_cols, label_encoder = \
-        task2_3_train_and_evaluate(df, label_col, feature_cols, drop_cols)
+        task2_3_train_and_evaluate(df, label_col, feature_cols)
 
     # ---- 任务4 ----
     imp_df = task4_feature_importance(preprocessor, pipelines, numeric_cols, categorical_cols)
