@@ -40,6 +40,3 @@ project/
 
 - Python >= 3.8
 - pandas, numpy, scikit-learn, matplotlib
-# StudentRiskPredictor
-# StudentRiskPredictor
-# StudentRiskPredictor
