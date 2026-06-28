@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}学业风险预测系统{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <h1>📊 学业风险预测</h1>
+    <div class="subtitle">高校学生学业预警系统</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-label">导航</div>
+    <a href="{{ url_for('index') }}" class="nav-item {% if request.endpoint == 'index' %}active{% endif %}">
+      <i class="fas fa-chart-pie"></i><span>仪表盘</span>
+    </a>
+    <a href="{{ url_for('train_page') }}" class="nav-item {% if request.endpoint == 'train_page' %}active{% endif %}">
+      <i class="fas fa-brain"></i><span>模型训练</span>
+    </a>
+    <a href="{{ url_for('predict_page') }}" class="nav-item {% if request.endpoint == 'predict_page' %}active{% endif %}">
+      <i class="fas fa-rocket"></i><span>风险预测</span>
+    </a>
+  </nav>
+</aside>
+
+<main class="main-content">
+  {% block content %}{% endblock %}
+</main>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

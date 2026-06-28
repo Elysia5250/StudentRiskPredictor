@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}仪表盘 — 学业风险预测系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>仪表盘</h2>
+  <p>系统概览与上次训练摘要</p>
+</div>
+
+<div class="stats-grid">
+  {% if dataset %}
+  <div class="stat-card">
+    <i class="fas fa-database stat-icon"></i>
+    <div class="stat-value">{{ dataset.rows }}</div>
+    <div class="stat-label">样本总数</div>
+    <div class="stat-bar" style="background: var(--primary);"></div>
+  </div>
+  <div class="stat-card">
+    <i class="fas fa-list stat-icon"></i>
+    <div class="stat-value">{{ dataset.features }}</div>
+    <div class="stat-label">特征维度</div>
+    <div class="stat-bar" style="background: var(--success);"></div>
+  </div>
+  <div class="stat-card">
+    <i class="fas fa-columns stat-icon"></i>
+    <div class="stat-value">{{ dataset.columns }}</div>
+    <div class="stat-label">总字段数</div>
+    <div class="stat-bar" style="background: var(--warning);"></div>
+  </div>
+  <div class="stat-card">
+    <i class="fas fa-tag stat-icon"></i>
+    <div class="stat-value">{{ dataset.label }}</div>
+    <div class="stat-label">预测目标</div>
+    <div class="stat-bar" style="background: var(--danger);"></div>
+  </div>
+  {% else %}
+  <div class="card" style="grid-column: 1 / -1;">
+    <p style="color: var(--text-muted); text-align: center; padding: 40px 0;">
+      <i class="fas fa-exclamation-triangle" style="font-size: 32px; display: block; margin-bottom: 12px; color: var(--warning);"></i>
+      未在 <code>data/</code> 目录下找到 CSV 数据文件<br>
+      请将数据文件放入后重新运行。
+    </p>
+  </div>
+  {% endif %}
+</div>
+
+{% if metrics %}
+<div class="card">
+  <div class="card-header">
+    <h3>上次训练结果</h3>
+    <a href="{{ url_for('train_page') }}" class="btn btn-outline btn-sm">
+      <i class="fas fa-sync"></i> 重新训练
+    </a>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table metrics-table">
+      <thead>
+        <tr>
+          <th>模型</th>
+          <th>Accuracy</th>
+          <th>Precision</th>
+          <th>Recall</th>
+          <th>F1</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in metrics %}
+        <tr>
+          <td>{{ m.Model }}</td>
+          {% for key in ['Accuracy', 'Precision', 'Recall', 'F1'] %}
+          <td class="{{ 'best-score' if loop.first and m[key] == metrics | map(attribute=key) | max else '' }}">
+            {{ '%.4f' | format(m[key]) }}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-header">
+    <h3>模型训练</h3>
+  </div>
+  <p style="color: var(--text-muted); text-align: center; padding: 30px 0;">
+    尚未进行训练，请前往
+    <a href="{{ url_for('train_page') }}" style="color: var(--primary); font-weight: 600;">模型训练</a>
+    页面开始训练。
+  </p>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">
+    <h3>特征列表</h3>
+  </div>
+  <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+    {% if dataset %}
+      {% for f in dataset.feature_list %}
+      <span class="badge badge-primary">{{ f }}</span>
+      {% endfor %}
+      {% if dataset.drop_cols %}
+        {% for d in dataset.drop_cols %}
+        <span class="badge badge-warning">{{ d }} (排除)</span>
+        {% endfor %}
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

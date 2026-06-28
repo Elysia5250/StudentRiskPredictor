@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}模型训练 — 学业风险预测系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>模型训练</h2>
+  <p>基于数据集训练分类模型，评估预测性能</p>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card">
+    <i class="fas fa-database stat-icon"></i>
+    <div class="stat-value">{{ dataset.rows if dataset else '—' }}</div>
+    <div class="stat-label">样本总数</div>
+    <div class="stat-bar" style="background: var(--primary);"></div>
+  </div>
+  <div class="stat-card">
+    <i class="fas fa-list stat-icon"></i>
+    <div class="stat-value">{{ dataset.features if dataset else '—' }}</div>
+    <div class="stat-label">特征维度</div>
+    <div class="stat-bar" style="background: var(--success);"></div>
+  </div>
+  <div class="stat-card">
+    <i class="fas fa-file-csv stat-icon"></i>
+    <div class="stat-value">{{ dataset.filename if dataset else '—' }}</div>
+    <div class="stat-label">数据文件</div>
+    <div class="stat-bar" style="background: var(--warning);"></div>
+  </div>
+  <div class="stat-card">
+    <i class="fas fa-robot stat-icon"></i>
+    <div class="stat-value">3</div>
+    <div class="stat-label">分类模型</div>
+    <div class="stat-bar" style="background: var(--danger);"></div>
+  </div>
+</div>
+
+<div class="action-bar">
+  <button class="btn btn-primary btn-lg" id="trainBtn" onclick="startTraining()">
+    <i class="fas fa-play"></i> 开始训练
+  </button>
+  {% if metrics %}
+  <span style="color: var(--text-muted); font-size: 13px;">
+    上次训练完成 · <a href="#" onclick="startTraining(); return false;" style="color: var(--primary);">重新训练</a>
+  </span>
+  {% endif %}
+</div>
+
+<div id="alert" class="alert"></div>
+
+<!-- Loading -->
+<div class="loading-overlay" id="trainLoading">
+  <div class="spinner"></div>
+  <div class="loading-text">模型训练中，请稍候<span class="loading-dots"></span></div>
+  <p style="color: var(--text-light); font-size: 12px; margin-top: 8px;">正在训练 3 个模型（逻辑回归、决策树、随机森林）…</p>
+</div>
+
+<!-- Results -->
+<div class="result-section" id="trainResult">
+  <div class="card">
+    <div class="card-header">
+      <h3>模型评估结果</h3>
+      <span class="badge badge-success" id="bestModelBadge"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table metrics-table" id="metricsTable">
+        <thead>
+          <tr>
+            <th>模型</th>
+            <th>Accuracy</th>
+            <th>Precision</th>
+            <th>Recall</th>
+            <th>F1</th>
+          </tr>
+        </thead>
+        <tbody id="metricsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3>特征重要性 (Top-5)</h3>
+    </div>
+    <ol class="feature-list" id="featureList"></ol>
+  </div>
+
+  <div class="chart-grid">
+    <div class="card chart-card">
+      <div class="card-header"><h3>模型性能对比</h3></div>
+      <div class="card-body">
+        <img src="{{ url_for('serve_output', filename='model_compare.png') }}" alt="模型性能对比" id="chartCompare">
+      </div>
+    </div>
+    <div class="card chart-card">
+      <div class="card-header"><h3>特征重要性排名</h3></div>
+      <div class="card-body">
+        <img src="{{ url_for('serve_output', filename='feature_importance.png') }}" alt="特征重要性" id="chartImportance">
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function startTraining() {
+  const btn = document.getElementById('trainBtn');
+  const loading = document.getElementById('trainLoading');
+  const result = document.getElementById('trainResult');
+  const alert = document.getElementById('alert');
+
+  alert.classList.remove('active');
+  result.classList.remove('active');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 训练中...';
+  loading.classList.add('active');
+
+  try {
+    const resp = await fetch('{{ url_for("api_train_run") }}', { method: 'POST' });
+    const data = await resp.json();
+    if (data.error) { throw new Error(data.error); }
+
+    // Poll for completion
+    await pollStatus();
+
+  } catch (e) {
+    showAlert('训练失败: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-sync"></i> 重新训练';
+    loading.classList.remove('active');
+  }
+}
+
+async function pollStatus() {
+  return new Promise((resolve, reject) => {
+    const interval = setInterval(async () => {
+      try {
+        const resp = await fetch('{{ url_for("api_train_status") }}');
+        const data = await resp.json();
+
+        if (!data.in_progress) {
+          clearInterval(interval);
+          if (data.error) {
+            reject(new Error(data.error));
+          } else {
+            displayResults(data.result);
+            resolve();
+          }
+        }
+      } catch (e) {
+        clearInterval(interval);
+        reject(e);
+      }
+    }, 1000);
+  });
+}
+
+function displayResults(result) {
+  // Metrics table
+  const tbody = document.getElementById('metricsBody');
+  tbody.innerHTML = '';
+  let bestF1 = -1;
+  let bestName = '';
+  result.metrics.forEach(m => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${m.Model}</td>
+      <td>${m.Accuracy.toFixed(4)}</td>
+      <td>${m.Precision.toFixed(4)}</td>
+      <td>${m.Recall.toFixed(4)}</td>
+      <td class="${m.F1 >= bestF1 ? 'best-score' : ''}">${m.F1.toFixed(4)}</td>`;
+    tbody.appendChild(tr);
+    if (m.F1 > bestF1) { bestF1 = m.F1; bestName = m.Model; }
+  });
+
+  document.getElementById('bestModelBadge').textContent = '最佳: ' + bestName + ' (F1=' + bestF1.toFixed(4) + ')';
+
+  // Feature importance
+  const flist = document.getElementById('featureList');
+  flist.innerHTML = '';
+  result.feature_importance.forEach((f, i) => {
+    const li = document.createElement('li');
+    li.className = 'feature-item';
+    const pct = (f.importance * 100).toFixed(1);
+    li.innerHTML = `<span class="feature-rank">${i + 1}</span>
+      <span class="feature-name">${f.feature}</span>
+      <div class="feature-bar-bg"><div class="feature-bar" style="width:${pct}%"></div></div>
+      <span class="feature-score">${f.importance.toFixed(4)}</span>`;
+    flist.appendChild(li);
+  });
+
+  // Refresh charts (add cache-busting timestamp)
+  const ts = Date.now();
+  document.getElementById('chartCompare').src = '{{ url_for("serve_output", filename="model_compare.png") }}?t=' + ts;
+  document.getElementById('chartImportance').src = '{{ url_for("serve_output", filename="feature_importance.png") }}?t=' + ts;
+
+  // Show result section
+  document.getElementById('trainResult').classList.add('active');
+  document.getElementById('alert').classList.remove('active');
+}
+
+function showAlert(msg, type) {
+  const alert = document.getElementById('alert');
+  alert.textContent = msg;
+  alert.className = 'alert active alert-' + type;
+}
+</script>
+{% endblock %}

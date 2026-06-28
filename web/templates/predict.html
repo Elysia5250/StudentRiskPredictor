@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}风险预测 — 学业风险预测系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>风险预测</h2>
+  <p>上传学生数据，预测挂科风险</p>
+</div>
+
+<!-- Upload -->
+<div class="card">
+  <div class="card-header">
+    <h3>上传数据</h3>
+  </div>
+  <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+    <i class="fas fa-cloud-upload-alt"></i>
+    <div class="upload-text">点击选择或拖拽 CSV 文件到此处</div>
+    <div class="upload-hint">支持 CSV 格式，需包含 {{ dataset.features if dataset else '12' }} 个特征列</div>
+    <input type="file" id="fileInput" accept=".csv" onchange="handleFile(this.files[0])">
+  </div>
+  <div class="upload-info" id="uploadInfo">
+    <i class="fas fa-check-circle"></i>
+    <span class="file-name" id="fileName"></span>
+    <span class="file-meta" id="fileMeta"></span>
+  </div>
+</div>
+
+<!-- Preview -->
+<div class="card" id="previewCard" style="display:none;">
+  <div class="card-header">
+    <h3>数据预览</h3>
+    <span class="badge badge-primary" id="rowCount"></span>
+  </div>
+  <div class="table-wrap" id="preview"></div>
+  <div style="margin-top: 16px; text-align: right;">
+    <button class="btn btn-primary btn-lg" id="predictBtn" onclick="runPrediction()">
+      <i class="fas fa-rocket"></i> 开始预测
+    </button>
+  </div>
+</div>
+
+<div id="alert" class="alert"></div>
+
+<!-- Loading -->
+<div class="loading-overlay" id="predictLoading">
+  <div class="spinner"></div>
+  <div class="loading-text">正在预测<span class="loading-dots"></span></div>
+</div>
+
+<!-- Results -->
+<div class="result-section" id="predictResult">
+  <div class="card">
+    <div class="card-header">
+      <h3>预测结果</h3>
+    </div>
+    <div class="summary-row" id="summaryRow"></div>
+    <div style="margin-top: 20px;">
+      <div class="table-wrap" id="resultPreview"></div>
+    </div>
+    <div style="margin-top: 16px; text-align: right;">
+      <a class="btn btn-success" id="downloadBtn">
+        <i class="fas fa-download"></i> 下载完整结果 CSV
+      </a>
+    </div>
+  </div>
+</div>
+
+<div id="uploadZoneOverlay" style="pointer-events: none;"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Drag & drop support
+const uploadZone = document.getElementById('uploadZone');
+
+uploadZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  uploadZone.classList.add('dragover');
+});
+
+uploadZone.addEventListener('dragleave', () => {
+  uploadZone.classList.remove('dragover');
+});
+
+uploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+
+async function handleFile(file) {
+  if (!file.name.endsWith('.csv')) {
+    showAlert('仅支持 CSV 文件', 'error');
+    return;
+  }
+
+  document.getElementById('previewCard').style.display = 'none';
+  document.getElementById('predictResult').classList.remove('active');
+  document.getElementById('alert').classList.remove('active');
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const resp = await fetch('{{ url_for("api_predict_upload") }}', { method: 'POST', body: formData });
+    const data = await resp.json();
+
+    if (data.error) {
+      let msg = data.error;
+      if (data.required_columns) {
+        msg += '<br><br><b>需要的特征列:</b><br>' + data.required_columns.join(', ');
+        msg += '<br><br><b>当前数据列:</b><br>' + data.existing_columns.join(', ');
+      }
+      showAlert(msg, 'error');
+      return;
+    }
+
+    // Show upload info
+    const info = document.getElementById('uploadInfo');
+    info.classList.add('active');
+    document.getElementById('fileName').textContent = file.name;
+    document.getElementById('fileMeta').textContent = data.rows + ' 条记录, ' + data.columns.length + ' 列';
+
+    // Show preview
+    document.getElementById('previewCard').style.display = 'block';
+    document.getElementById('preview').innerHTML = data.preview_html;
+    document.getElementById('rowCount').textContent = data.rows + ' 条';
+    document.getElementById('predictBtn').dataset.fileId = data.file_id;
+    document.getElementById('predictBtn').disabled = false;
+
+  } catch (e) {
+    showAlert('上传失败: ' + e.message, 'error');
+  }
+}
+
+async function runPrediction() {
+  const fileId = document.getElementById('predictBtn').dataset.fileId;
+  if (!fileId) return;
+
+  const btn = document.getElementById('predictBtn');
+  const loading = document.getElementById('predictLoading');
+  const result = document.getElementById('predictResult');
+  const alert = document.getElementById('alert');
+
+  alert.classList.remove('active');
+  result.classList.remove('active');
+  btn.disabled = true;
+  loading.classList.add('active');
+
+  try {
+    const resp = await fetch('{{ url_for("api_predict_run") }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: fileId }),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      showAlert('预测失败: ' + data.error, 'error');
+      return;
+    }
+
+    // Summary
+    document.getElementById('summaryRow').innerHTML = `
+      <div class="summary-item">
+        <div class="value">${data.total}</div>
+        <div class="label">总样本</div>
+      </div>
+      <div class="summary-item">
+        <div class="value">${data.positive_count}</div>
+        <div class="label">预测 [${data.positive_label}]</div>
+      </div>
+      <div class="summary-item">
+        <div class="value">${data.positive_rate}%</div>
+        <div class="label">挂科率</div>
+      </div>
+    `;
+
+    // Preview
+    document.getElementById('resultPreview').innerHTML = data.preview_html;
+
+    // Download
+    document.getElementById('downloadBtn').href = data.download_url;
+
+    result.classList.add('active');
+
+  } catch (e) {
+    showAlert('预测失败: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    loading.classList.remove('active');
+  }
+}
+
+function showAlert(msg, type) {
+  const alert = document.getElementById('alert');
+  alert.innerHTML = msg;
+  alert.className = 'alert active alert-' + type;
+}
+</script>
+{% endblock %}
