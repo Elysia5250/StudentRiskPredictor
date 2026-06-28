@@ -85,6 +85,9 @@ import matplotlib.pyplot as plt
 # sklearn 模型选择
 from sklearn.model_selection import train_test_split
 
+# 模型持久化
+import joblib
+
 # sklearn 预处理组件
 from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
@@ -1071,6 +1074,23 @@ def main():
 
     # 任务6：报告素材
     task6_report(label_col, feature_cols, drop_cols, results_df, imp_df, df)
+
+    # ============================================
+    # 步骤 7：保存模型（供 predict.py 调用）
+    # ============================================
+    model_dir = os.path.join(OUTPUT_DIR, 'models')
+    os.makedirs(model_dir, exist_ok=True)
+
+    # 找到 F1 最高的模型作为最佳模型
+    best_idx = results_df['F1'].idxmax()
+    best_model_name = results_df.loc[best_idx, 'Model']
+    best_pipeline = pipelines[best_model_name]
+
+    joblib.dump(best_pipeline, os.path.join(model_dir, 'best_model.pkl'))
+    joblib.dump(label_encoder, os.path.join(model_dir, 'label_encoder.pkl'))
+    joblib.dump(feature_cols, os.path.join(model_dir, 'feature_columns.pkl'))
+
+    print(f'\n最佳模型 [{best_model_name}] 已保存至: {model_dir}/')
 
     print('\n' + '=' * 60)
     print('  所有任务完成！输出文件在 output/ 目录下。')
