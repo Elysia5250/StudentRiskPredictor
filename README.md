@@ -58,8 +58,8 @@ python3 predict.py data/新数据.csv
 
 ```bash
 cd web
-FLASK_APP=app.py python3 -m flask run --port 5000
-# 浏览器访问 http://localhost:5000
+python app.py
+# 浏览器访问 http://localhost:5001
 ```
 
 三个页面：
