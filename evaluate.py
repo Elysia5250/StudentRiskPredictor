@@ -497,7 +497,7 @@ def plot_feature_importance_combined(models_results, feature_cols, top_n=20):
         labels = [col_zh(feature_cols[i]) for i in indices][::-1]
         ax.set_yticklabels(labels, fontsize=CHART_FONTSIZE_TICK)
         ax.set_xlabel('重要性', fontsize=CHART_FONTSIZE_LABEL)
-        ax.set_title(f'Top {top_n} 特征重要性 - {display_name}', fontsize=CHART_FONTSIZE_TITLE, fontweight='bold')
+        ax.set_title(f'前{top_n}个重要特征 - {display_name}', fontsize=CHART_FONTSIZE_TITLE, fontweight='bold')
         ax.grid(alpha=0.3, axis='x')
         for i, (bar, val) in enumerate(zip(ax.patches, importances[indices][::-1])):
             ax.text(val + 0.001, bar.get_y() + bar.get_height() / 2,

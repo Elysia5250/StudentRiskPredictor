@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h2>模型训练</h2>
-  <p>基于数据集训练分类模型，评估预测性能</p>
+  <p>基于 OULAD 特征宽表训练分类模型，评估预测性能</p>
 </div>
 
 <div class="stats-grid">
@@ -28,8 +28,8 @@
   </div>
   <div class="stat-card">
     <i class="fas fa-robot stat-icon"></i>
-    <div class="stat-value">3</div>
-    <div class="stat-label">分类模型</div>
+    <div class="stat-value" id="modelCountDisplay">{{ '—' }}</div>
+    <div class="stat-label">可用模型</div>
     <div class="stat-bar" style="background: var(--danger);"></div>
   </div>
 </div>
@@ -51,7 +51,7 @@
 <div class="loading-overlay" id="trainLoading">
   <div class="spinner"></div>
   <div class="loading-text">模型训练中，请稍候<span class="loading-dots"></span></div>
-  <p style="color: var(--text-light); font-size: 12px; margin-top: 8px;">正在训练 3 个模型（逻辑回归、决策树、随机森林）…</p>
+  <p style="color: var(--text-light); font-size: 12px; margin-top: 8px;">包括训练、评估、图表生成和 SHAP 可解释性分析</p>
 </div>
 
 <!-- Results -->
@@ -66,10 +66,11 @@
         <thead>
           <tr>
             <th>模型</th>
-            <th>Accuracy</th>
-            <th>Precision</th>
-            <th>Recall</th>
-            <th>F1</th>
+            <th>准确率</th>
+            <th>精确率</th>
+            <th>召回率</th>
+            <th>F1分数</th>
+            <th>ROC AUC</th>
           </tr>
         </thead>
         <tbody id="metricsBody"></tbody>
@@ -88,13 +89,25 @@
     <div class="card chart-card">
       <div class="card-header"><h3>模型性能对比</h3></div>
       <div class="card-body">
-        <img src="{{ url_for('serve_output', filename='model_compare.png') }}" alt="模型性能对比" id="chartCompare">
+        <img src="/figures/model_metrics_comparison.png" alt="模型性能对比" id="chartCompare">
       </div>
     </div>
     <div class="card chart-card">
       <div class="card-header"><h3>特征重要性排名</h3></div>
       <div class="card-body">
-        <img src="{{ url_for('serve_output', filename='feature_importance.png') }}" alt="特征重要性" id="chartImportance">
+        <img src="/figures/feature_importance.png" alt="特征重要性" id="chartImportance">
+      </div>
+    </div>
+    <div class="card chart-card">
+      <div class="card-header"><h3>混淆矩阵</h3></div>
+      <div class="card-body">
+        <img src="/figures/confusion_matrix.png" alt="混淆矩阵" id="chartCM">
+      </div>
+    </div>
+    <div class="card chart-card">
+      <div class="card-header"><h3>ROC 曲线</h3></div>
+      <div class="card-body">
+        <img src="/figures/roc_comparison.png" alt="ROC曲线" id="chartROC">
       </div>
     </div>
   </div>
@@ -119,10 +132,7 @@ async function startTraining() {
     const resp = await fetch('{{ url_for("api_train_run") }}', { method: 'POST' });
     const data = await resp.json();
     if (data.error) { throw new Error(data.error); }
-
-    // Poll for completion
     await pollStatus();
-
   } catch (e) {
     showAlert('训练失败: ' + e.message, 'error');
   } finally {
@@ -138,7 +148,6 @@ async function pollStatus() {
       try {
         const resp = await fetch('{{ url_for("api_train_status") }}');
         const data = await resp.json();
-
         if (!data.in_progress) {
           clearInterval(interval);
           if (data.error) {
@@ -156,45 +165,58 @@ async function pollStatus() {
   });
 }
 
+const ZH_MODEL = {
+  'LogisticRegression': '逻辑回归',
+  'RandomForest': '随机森林',
+  'LightGBM': 'LightGBM',
+  'XGBoost': 'XGBoost',
+};
+
 function displayResults(result) {
+  document.getElementById('modelCountDisplay').textContent = result.model_count || '—';
+
   // Metrics table
   const tbody = document.getElementById('metricsBody');
   tbody.innerHTML = '';
-  let bestF1 = -1;
+  let bestAuc = -1;
   let bestName = '';
+  const keys = ['Accuracy', 'Precision', 'Recall', 'F1', 'ROC_AUC'];
   result.metrics.forEach(m => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${m.Model}</td>
-      <td>${m.Accuracy.toFixed(4)}</td>
-      <td>${m.Precision.toFixed(4)}</td>
-      <td>${m.Recall.toFixed(4)}</td>
-      <td class="${m.F1 >= bestF1 ? 'best-score' : ''}">${m.F1.toFixed(4)}</td>`;
+    let html = `<td>${ZH_MODEL[m.Model] || m.Model}</td>`;
+    keys.forEach(k => {
+      const isBest = m[k] >= bestAuc && k === 'ROC_AUC';
+      if (k === 'ROC_AUC' && m[k] > bestAuc) { bestAuc = m[k]; bestName = m.Model; }
+      html += `<td class="${isBest ? 'best-score' : ''}">${m[k].toFixed(4)}</td>`;
+    });
+    tr.innerHTML = html;
     tbody.appendChild(tr);
-    if (m.F1 > bestF1) { bestF1 = m.F1; bestName = m.Model; }
   });
-
-  document.getElementById('bestModelBadge').textContent = '最佳: ' + bestName + ' (F1=' + bestF1.toFixed(4) + ')';
+  document.getElementById('bestModelBadge').textContent = '最佳: ' + (ZH_MODEL[bestName] || bestName) + ' (AUC=' + bestAuc.toFixed(4) + ')';
 
   // Feature importance
   const flist = document.getElementById('featureList');
   flist.innerHTML = '';
-  result.feature_importance.forEach((f, i) => {
-    const li = document.createElement('li');
-    li.className = 'feature-item';
-    const pct = (f.importance * 100).toFixed(1);
-    li.innerHTML = `<span class="feature-rank">${i + 1}</span>
-      <span class="feature-name">${f.feature}</span>
-      <div class="feature-bar-bg"><div class="feature-bar" style="width:${pct}%"></div></div>
-      <span class="feature-score">${f.importance.toFixed(4)}</span>`;
-    flist.appendChild(li);
-  });
+  if (result.feature_importance) {
+    result.feature_importance.forEach((f, i) => {
+      const li = document.createElement('li');
+      li.className = 'feature-item';
+      const pct = (f.importance * 100).toFixed(1);
+      li.innerHTML = `<span class="feature-rank">${i + 1}</span>
+        <span class="feature-name">${f.feature}</span>
+        <div class="feature-bar-bg"><div class="feature-bar" style="width:${pct}%"></div></div>
+        <span class="feature-score">${f.importance.toFixed(4)}</span>`;
+      flist.appendChild(li);
+    });
+  }
 
-  // Refresh charts (add cache-busting timestamp)
+  // Refresh charts with cache-busting
   const ts = Date.now();
-  document.getElementById('chartCompare').src = '{{ url_for("serve_output", filename="model_compare.png") }}?t=' + ts;
-  document.getElementById('chartImportance').src = '{{ url_for("serve_output", filename="feature_importance.png") }}?t=' + ts;
+  document.getElementById('chartCompare').src = '/figures/model_metrics_comparison.png?t=' + ts;
+  document.getElementById('chartImportance').src = '/figures/feature_importance.png?t=' + ts;
+  document.getElementById('chartCM').src = '/figures/confusion_matrix.png?t=' + ts;
+  document.getElementById('chartROC').src = '/figures/roc_comparison.png?t=' + ts;
 
-  // Show result section
   document.getElementById('trainResult').classList.add('active');
   document.getElementById('alert').classList.remove('active');
 }

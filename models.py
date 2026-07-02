@@ -106,14 +106,74 @@ def prepare_data(df, label_col, cat_cols, num_cols):
     return X_train, X_test, y_train, y_test, feature_cols
 
 
+# ==================== 缺失值预处理 ====================
+_SENTINEL_COLS = [
+    'first_submission_day_120',
+    'last_submission_day_120',
+    'first_click_day_120',
+    'last_click_day_120',
+]
+
+def _fill_sentinel(X, sentinel_cols=None, value=-1):
+    """
+    对特定列用哨兵值填充缺失值（如 -1 表示"从未提交/从未点击"）。
+    这些值不参与中位数填充，避免将"无行为"误判为"平均行为"。
+    """
+    if sentinel_cols is None:
+        sentinel_cols = _SENTINEL_COLS
+    X = X.copy()
+    for col in sentinel_cols:
+        if col in X.columns:
+            X[col] = X[col].fillna(value)
+    return X
+
+
 # ==================== 模型训练 ====================
 def train_and_predict(model_map, cat_cols, num_cols, X_train, y_train, X_test):
     """
     为每个模型构建完整 Pipeline（预处理 + 分类器），训练并预测。
     逻辑回归使用 StandardScaler，树模型不使用。
     """
+    # 统一预处理：对缺失的提交日期/点击日期用 -1 填充（不同于普通中位数填充）
+    X_train = _fill_sentinel(X_train)
+    X_test = _fill_sentinel(X_test)
+
+    # 计算类别权重
+    neg, pos = y_train.value_counts().sort_index()
+    scale_pos_weight_val = neg / pos if pos > 0 else 1.0
+
     results = {}
     for name, model in model_map.items():
+        # 根据不同模型设置类别权重
+        if name == 'LogisticRegression':
+            model.set_params(class_weight='balanced')
+        elif name == 'RandomForest':
+            model.set_params(class_weight='balanced_subsample')
+        elif name == 'LightGBM':
+            model.set_params(
+                scale_pos_weight=scale_pos_weight_val,
+                num_leaves=63,
+                learning_rate=0.05,
+                n_estimators=300,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                min_child_samples=20,
+                reg_alpha=0.1,
+                reg_lambda=0.1,
+            )
+        elif name == 'XGBoost':
+            model.set_params(
+                scale_pos_weight=scale_pos_weight_val,
+                learning_rate=0.05,
+                n_estimators=300,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                max_depth=6,
+                min_child_weight=3,
+                reg_alpha=0.1,
+                reg_lambda=0.1,
+            )
+
         scale = (name == 'LogisticRegression')
         pre = build_preprocessor(cat_cols, num_cols, scale_numeric=scale)
         pipe = Pipeline([('prep', pre), ('clf', model)])
