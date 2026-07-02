@@ -359,12 +359,13 @@ def plot_model_comparison(metrics_df):
 
 
 # ==================== 指标计算 ====================
-def evaluate_all(models_results, y_test):
+def evaluate_all(models_results, y_test, threshold=0.5):
+    """计算各模型的指标，支持自定义概率截断阈值（对预警场景更实用）"""
     rows = []
     for name, res in models_results.items():
-        y_pred = res['y_pred']
         y_proba = res['y_proba']
         pos_proba = y_proba[:, 1] if y_proba.shape[1] > 1 else y_proba[:, 0]
+        y_pred = (pos_proba >= threshold).astype(int)
         acc = accuracy_score(y_test, y_pred)
         prec = precision_score(y_test, y_pred, zero_division=0)
         rec = recall_score(y_test, y_pred, zero_division=0)
@@ -562,13 +563,61 @@ def plot_pr_comparison(models_results, y_test):
     print(f'  PR 对比图 -> {path}')
 
 
+# ==================== 阈值优化结果保存 ====================
+def save_cv_results(cv_results):
+    """保存交叉验证结果到 CSV"""
+    rows = []
+    for name, res in cv_results.items():
+        rows.append({
+            'Model': name,
+            'CV_Mean_AUC': res['mean'],
+            'CV_Std_AUC': res['std'],
+            'CV_Folds': str(res['aucs']),
+        })
+    df = pd.DataFrame(rows)
+    path = os.path.join(OUTPUT_DIR, 'cv_results.csv')
+    df.to_csv(path, index=False, encoding='utf-8-sig')
+    print(f'  CV 结果 -> {path}')
+    return df
+
+
+def save_threshold_results(threshold_results, best_threshold):
+    """保存阈值搜索结果到 CSV"""
+    df = pd.DataFrame(threshold_results)
+    path = os.path.join(OUTPUT_DIR, 'threshold_search.csv')
+    df.to_csv(path, index=False, encoding='utf-8-sig')
+    print(f'  阈值搜索结果 -> {path}（最优截断点: {best_threshold}）')
+
+
+def print_final_summary(metrics_df, cv_results=None, best_threshold=0.5):
+    """打印最终摘要信息"""
+    best_idx = metrics_df['ROC_AUC'].idxmax()
+    best_name = metrics_df.loc[best_idx, 'Model']
+    best_auc = metrics_df.loc[best_idx, 'ROC_AUC']
+    print(f'\n  {"=" * 60}')
+    print(f'  ■ 最终摘要')
+    print(f'  {"=" * 60}')
+    print(f'  最佳模型: {best_name} (AUC = {best_auc:.4f})')
+    print(f'  最优截断阈值: {best_threshold}')
+    if cv_results and best_name in cv_results:
+        r = cv_results[best_name]
+        print(f'  5折 CV AUC: {r["mean"]} ± {r["std"]}')
+
+    # 打印最终对比表
+    print(f'\n  {"模型":<20s} {"准确率":<8s} {"精确率":<8s} {"召回率":<8s} {"F1":<8s} {"AUC":<8s}')
+    print(f'  {"-"*60}')
+    for _, row in metrics_df.iterrows():
+        print(f'  {row["Model"]:<20s} {row["Accuracy"]:<8.4f} {row["Precision"]:<8.4f} {row["Recall"]:<8.4f} {row["F1"]:<8.4f} {row["ROC_AUC"]:<8.4f}')
+
+
 # ==================== 评估入口 ====================
-def run_evaluation(models_results, X_test, y_test, feature_cols, df_full=None):
+def run_evaluation(models_results, X_test, y_test, feature_cols, df_full=None,
+                   optimal_threshold=0.5, cv_results=None, threshold_search=None):
     print('=' * 60)
     print('  评估阶段')
     print('=' * 60)
 
-    metrics_df = evaluate_all(models_results, y_test)
+    metrics_df = evaluate_all(models_results, y_test, threshold=optimal_threshold)
 
     # EDA 图（使用全量数据）
     if df_full is not None:
@@ -592,5 +641,14 @@ def run_evaluation(models_results, X_test, y_test, feature_cols, df_full=None):
     plot_feature_importance_combined(models_results, feature_cols)  # feature_importance.png
 
     save_predictions(models_results, X_test, y_test)
+
+    # CV 与阈值结果
+    if cv_results:
+        save_cv_results(cv_results)
+    if threshold_search:
+        save_threshold_results(threshold_search, optimal_threshold)
+
+    # 最终摘要
+    print_final_summary(metrics_df, cv_results, optimal_threshold)
 
     return metrics_df
